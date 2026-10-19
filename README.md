@@ -26,14 +26,15 @@ The bundle contains one small Stimulus controller. No database tables, backend s
 
 Changes to standard inputs, checkboxes, radio buttons, selects, textareas, and selected files are tracked by values rather than by a simple "ever touched" flag. A change event is dispatched when the dirty state toggles.
 
-## Installation from GitHub
+## Installation
 
-Until the package is registered on Packagist, add its Git repository to Composer:
+Unsaved Form Bundle is [available on Packagist](https://packagist.org/packages/alkin/unsaved-form-bundle). Install the stable 1.x version directly with Composer:
 
 ```bash
-composer config repositories.unsaved-form vcs https://github.com/alkinbg/UnsavedFormBundle.git
-composer require 'alkin/unsaved-form-bundle:^1.0'
+composer require "alkin/unsaved-form-bundle:^1.0"
 ```
+
+No custom Composer repository is needed. Install the package in the Symfony project where its forms will be used.
 
 Symfony Flex discovers the bundle and its Stimulus controller. Verify `config/bundles.php` and `assets/controllers.json`. Symfony StimulusBundle and a configured frontend pipeline (such as AssetMapper) are required.
 
