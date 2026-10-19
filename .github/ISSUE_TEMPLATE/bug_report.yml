@@ -1,0 +1,65 @@
+name: Bug report
+description: Report reproducible behavior that does not work as expected.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Thanks for helping improve Unsaved Form Bundle. Do not include passwords,
+        real form values or personal data. Use private security reporting for vulnerabilities.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Bundle, PHP, Symfony, StimulusBundle, Turbo (if installed), and browser versions.
+      placeholder: "Bundle 1.0.0 / PHP 8.4 / Symfony 8.x / Turbo 8 / Chrome"
+    validations:
+      required: true
+  - type: dropdown
+    id: navigation
+    attributes:
+      label: Scenario
+      description: Where does the unexpected behavior happen?
+      options:
+        - No Turbo (native browser navigation)
+        - Turbo Drive
+        - Turbo Back/Forward
+        - Turbo Frame
+        - Turbo Stream
+        - Form submit or validation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: A minimal HTML/Twig example and repeatable steps help us investigate.
+      placeholder: |
+        1. Open a form with this controller
+        2. Modify a field
+        3. Navigate or submit using...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include sanitized errors or screenshots when helpful.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Relevant configuration, whether the issue is intermittent, and any workaround.
+    validations:
+      required: false
