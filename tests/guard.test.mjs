@@ -465,3 +465,34 @@ test('Turbo Frame visits outside the dirty form do not prompt', () => {
     otherFrame.dispatchEvent(event);
     assert.equal(event.detail.render, renderer);
 });
+
+test('Turbo cache restoration retains previously edited values', async () => {
+    const cached = form.cloneNode(true);
+    input('title').value = 'Unsaved draft';
+    dispatchInput(input('title'));
+    assert.equal(guard.refresh(), true);
+    assert.equal(cached.elements.namedItem('title').value, 'Original');
+
+    form.replaceWith(cached);
+    await tick();
+    const replacementController = application.getControllerForElementAndIdentifier(cached, identifier);
+    assert.ok(replacementController);
+    assert.equal(cached.elements.namedItem('title').value, 'Unsaved draft');
+    assert.equal(replacementController.refresh(), true);
+});
+
+test('reverting changes clears the draft before Turbo restores the form', async () => {
+    const cached = form.cloneNode(true);
+    input('title').value = 'Temporary';
+    dispatchInput(input('title'));
+    input('title').value = 'Original';
+    dispatchInput(input('title'));
+    assert.equal(guard.refresh(), false);
+
+    form.replaceWith(cached);
+    await tick();
+    const replacementController = application.getControllerForElementAndIdentifier(cached, identifier);
+    assert.ok(replacementController);
+    assert.equal(cached.elements.namedItem('title').value, 'Original');
+    assert.equal(replacementController.refresh(), false);
+});

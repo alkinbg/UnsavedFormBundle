@@ -94,8 +94,11 @@ async function main() {
                 await visit(page, '/edit');
                 await page.locator('#nav').click();
                 await page.waitForURL('**/other');
+                await page.evaluate(() => { window.__restorationReady = new Promise((resolve) => document.addEventListener('turbo:load', resolve, { once: true })); });
                 await page.goBack();
                 await page.waitForURL('**/edit');
+                await page.evaluate(() => window.__restorationReady);
+                await page.waitForFunction(() => !document.documentElement.hasAttribute('data-turbo-preview'));
                 await page.waitForFunction(() => !!window.application?.getControllerForElementAndIdentifier(document.querySelector('#edit-form'), 'guard'));
                 await page.locator('#edit-form input[type=text]').fill('Dirty after back');
                 await page.locator('#edit-form input[type=file]').setInputFiles({ name: 'sample.txt', mimeType: 'text/plain', buffer: Buffer.from('draft file') });
@@ -125,8 +128,11 @@ async function main() {
                 await visit(page, '/edit');
                 await page.locator('#nav').click();
                 await page.waitForURL('**/other');
+                await page.evaluate(() => { window.__restorationReady = new Promise((resolve) => document.addEventListener('turbo:load', resolve, { once: true })); });
                 await page.locator('#return').click();
                 await page.waitForURL('**/edit');
+                await page.evaluate(() => window.__restorationReady);
+                await page.waitForFunction(() => !document.documentElement.hasAttribute('data-turbo-preview'));
                 await page.waitForFunction(() => !!window.application?.getControllerForElementAndIdentifier(document.querySelector('#edit-form'), 'guard'));
                 await page.locator('#edit-form input[type=text]').fill('Dirty when going Back');
 

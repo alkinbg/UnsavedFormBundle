@@ -72,7 +72,7 @@ The controller is loaded automatically and works with or without Symfony UX Turb
 
 **A website cannot guarantee a confirmation on every OS- or browser-initiated termination.** For example, mobile browsers may skip `beforeunload` when an app is force-closed. Browsers control the native confirmation text and may require previous user interaction; our JavaScript cannot override these policies.
 
-Turbo restoration visits do not fire `turbo:before-visit`. The bundle uses the Navigation API history-entry index to reverse declined Back/Forward traversal at `popstate`, then preserves the original form baseline across Turbo cache restorations, where the index is available. Browser versions without a history-entry index require a fallback and cannot currently offer the same behavior. The automated browser tests cover modern Chromium, Firefox, and WebKit, including Back, Forward, Frames, Streams, and operation without Turbo.
+Turbo restoration visits do not fire `turbo:before-visit`. The bundle uses the Navigation API history-entry index to reverse declined Back/Forward traversal at `popstate`. It retains unsaved field values in page memory and restores them if Turbo re-renders a cached copy of the form, where the index is available. Browser versions without a history-entry index require a fallback and cannot currently offer the same behavior. The automated browser tests cover modern Chromium, Firefox, and WebKit, including Back, Forward, Frames, Streams, and operation without Turbo.
 
 Turbo Frame navigation is guarded immediately before rendering. When a user declines, the new frame content is not rendered and the frame's `src` is cleared because it no longer represents the visible frame content.
 

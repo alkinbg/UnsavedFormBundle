@@ -8,6 +8,9 @@ let expectedRollbackIndex = null;
 // Turbo caches cloned form nodes. Keep the original comparison baseline in
 // memory so a restored dirty form does not incorrectly become pristine.
 const cachedBaselines = new Map();
+const cachedBaselineFields = new Map();
+const cachedDraftFields = new Map();
+const keysByDocument = new WeakMap();
 let nextCacheKey = 0;
 
 export default class extends Controller {
@@ -41,11 +44,25 @@ export default class extends Controller {
             throw new TypeError('Unsaved Form must be attached to a <form> element.');
         }
 
-        this.historyIndex = this.element.ownerDocument.defaultView.navigation?.currentEntry?.index ?? null;
-        this.cacheKey = this.element.dataset.unsavedFormCacheKey || `unsaved-form-${++nextCacheKey}`;
+        const win = this.element.ownerDocument.defaultView;
+        this.historyIndex = win.navigation?.currentEntry?.index ?? null;
+        const identity = `${win.location.pathname}${win.location.search}|${this.element.id || this.element.name || [...win.document.forms].indexOf(this.element)}`;
+        let documentKeys = keysByDocument.get(this.element.ownerDocument);
+        if (!documentKeys) {
+            documentKeys = new Map();
+            keysByDocument.set(this.element.ownerDocument, documentKeys);
+        }
+        this.cacheKey = this.element.dataset.unsavedFormCacheKey || documentKeys.get(identity) || `unsaved-form-${++nextCacheKey}`;
+        documentKeys.set(identity, this.cacheKey);
         this.element.dataset.unsavedFormCacheKey = this.cacheKey;
         this.baseline = cachedBaselines.get(this.cacheKey) ?? this.snapshot();
         cachedBaselines.set(this.cacheKey, this.baseline);
+        this.baselineFields = cachedBaselineFields.get(this.cacheKey) ?? this.readFields();
+        cachedBaselineFields.set(this.cacheKey, this.baselineFields);
+        const draft = cachedDraftFields.get(this.cacheKey);
+        if (draft) {
+            this.restoreFields(draft);
+        }
         this.dirty = this.snapshot() !== this.baseline;
         this.submitting = false;
         this.failedSubmission = false;
@@ -169,6 +186,7 @@ export default class extends Controller {
     }
 
     onTurboBeforeCache() {
+        this.refresh();
         cachedBaselines.set(this.cacheKey, this.baseline);
     }
 
@@ -281,12 +299,23 @@ export default class extends Controller {
     markClean() {
         this.baseline = this.snapshot();
         cachedBaselines.set(this.cacheKey, this.baseline);
+        this.baselineFields = this.readFields();
+        cachedBaselineFields.set(this.cacheKey, this.baselineFields);
+        cachedDraftFields.delete(this.cacheKey);
         this.submitting = false;
         this.refresh();
     }
 
     refresh() {
         const nextDirty = this.snapshot() !== this.baseline;
+        if (nextDirty) {
+            const originals = new Map(this.baselineFields.map((entry) => [entry.id, entry.comparable]));
+            cachedDraftFields.set(this.cacheKey, this.readFields().filter((entry) =>
+                JSON.stringify(entry.comparable) !== JSON.stringify(originals.get(entry.id))
+            ));
+        } else {
+            cachedDraftFields.delete(this.cacheKey);
+        }
 
         if (nextDirty !== this.dirty) {
             this.dirty = nextDirty;
@@ -301,6 +330,70 @@ export default class extends Controller {
         this.indicatorTargets.forEach((target) => {
             target.hidden = !this.dirty;
         });
+    }
+
+    readFields() {
+        const result = [];
+        const counters = new Map();
+        for (const control of this.element.elements) {
+            if (!control.name || control.disabled || control.closest('[data-unsaved-form-ignore]') ||
+                (control.tagName === 'INPUT' && ['button', 'submit', 'reset', 'image'].includes(control.type))) {
+                continue;
+            }
+
+            const base = `${control.name}|${control.type}`;
+            const sequence = counters.get(base) ?? 0;
+            counters.set(base, sequence + 1);
+            const type = control.type;
+            const value = type === 'file'
+                ? Array.from(control.files ?? [])
+                : type === 'checkbox' || type === 'radio'
+                    ? control.checked
+                    : type === 'select-multiple'
+                        ? Array.from(control.options, (option) => option.selected)
+                        : control.value;
+            const comparable = type === 'file'
+                ? value.map((file) => [file.name, file.size, file.lastModified, file.type])
+                : value;
+
+            result.push({ id: `${base}|${sequence}`, value, comparable, control });
+        }
+        return result.map(({ id, value, comparable }) => ({ id, value, comparable }));
+    }
+
+    restoreFields(draft) {
+        const controls = Array.from(this.element.elements);
+        const counters = new Map();
+        const fields = new Map(draft.map((entry) => [entry.id, entry.value]));
+        const win = this.element.ownerDocument.defaultView;
+        for (const control of controls) {
+            if (!control.name || control.disabled || control.closest('[data-unsaved-form-ignore]') ||
+                (control.tagName === 'INPUT' && ['button', 'submit', 'reset', 'image'].includes(control.type))) {
+                continue;
+            }
+            const base = `${control.name}|${control.type}`;
+            const sequence = counters.get(base) ?? 0;
+            counters.set(base, sequence + 1);
+            const key = `${base}|${sequence}`;
+            if (!fields.has(key)) continue;
+
+            const value = fields.get(key);
+            if (control.type === 'checkbox' || control.type === 'radio') {
+                control.checked = value;
+            } else if (control.type === 'select-multiple') {
+                Array.from(control.options).forEach((option, index) => {
+                    option.selected = value[index] ?? false;
+                });
+            } else if (control.type === 'file') {
+                if (typeof win.DataTransfer === 'function') {
+                    const transfer = new win.DataTransfer();
+                    for (const file of value) transfer.items.add(file);
+                    control.files = transfer.files;
+                }
+            } else {
+                control.value = value;
+            }
+        }
     }
 
     snapshot() {
