@@ -27,9 +27,10 @@ function form(id = 'edit-form', values = { title: 'Original' }) {
     </form>`;
 }
 
-function edit(turbo = true) {
+function edit(turbo = true, values = { title: 'Original' }) {
     return layout(`<h1>EDIT</h1>
-        ${form()}
+        ${values.invalid ? '<p id="validation-error">Invalid form</p>' : ''}
+        ${form('edit-form', values)}
         <nav>
             <a href="/other" id="nav">Turbo navigation</a>
             <a href="/other" id="hard" data-turbo="false">Native navigation</a>
@@ -61,6 +62,13 @@ http.createServer((request, response) => {
         const file = path.join(root, path.basename(request.url));
         response.setHeader('Content-Type', 'text/javascript');
         response.end(fs.readFileSync(file));
+        return;
+    }
+
+    if (request.url === '/submit-invalid' && request.method === 'POST') {
+        request.resume();
+        response.writeHead(422, { 'Content-Type': 'text/html; charset=utf-8' });
+        response.end(edit(true, { title: 'Draft invalid', invalid: true }));
         return;
     }
 

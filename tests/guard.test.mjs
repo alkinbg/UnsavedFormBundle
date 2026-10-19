@@ -349,6 +349,40 @@ test('Turbo cache restoration keeps the original baseline for dirty forms', asyn
     assert.equal(clone.querySelector('span').hidden, false);
 });
 
+test('Turbo 422 response carries dirty baseline into a newly rendered form', async () => {
+    form.id = 'edit-form';
+    input('title').value = 'Draft invalid';
+    dispatchInput(input('title'));
+    const original = guard.baseline;
+
+    form.dispatchEvent(new dom.window.CustomEvent('turbo:submit-start', { bubbles: true }));
+    form.dispatchEvent(new dom.window.CustomEvent('turbo:before-fetch-response', {
+        bubbles: true,
+        detail: { fetchResponse: { succeeded: false, statusCode: 422 } },
+    }));
+    form.dispatchEvent(new dom.window.CustomEvent('turbo:submit-end', {
+        bubbles: true,
+        detail: { success: false },
+    }));
+
+    const newBody = dom.window.document.createElement('body');
+    newBody.innerHTML = formMarkup.replace('<form ', '<form id="edit-form" ').replace('value="Original"', 'value="Draft invalid"');
+    const replacement = newBody.querySelector('form');
+    dom.window.document.dispatchEvent(new dom.window.CustomEvent('turbo:before-render', {
+        bubbles: true,
+        detail: { newBody },
+    }));
+
+    assert.equal(replacement.dataset.unsavedFormCacheKey, guard.cacheKey);
+    form.replaceWith(replacement);
+    await tick();
+
+    const nextController = application.getControllerForElementAndIdentifier(replacement, identifier);
+    assert.ok(nextController);
+    assert.equal(nextController.baseline, original);
+    assert.equal(nextController.refresh(), true);
+});
+
 test('Turbo Stream replacement can be declined without losing a dirty form', () => {
     form.id = 'edit-form';
     input('title').value = 'Unsaved';

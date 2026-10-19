@@ -28,6 +28,8 @@ export default class extends Controller {
         this.onTurboSubmitEnd = this.onTurboSubmitEnd.bind(this);
         this.onTurboBeforeVisit = this.onTurboBeforeVisit.bind(this);
         this.onTurboBeforeCache = this.onTurboBeforeCache.bind(this);
+        this.onTurboBeforeFetchResponse = this.onTurboBeforeFetchResponse.bind(this);
+        this.onTurboBeforeRender = this.onTurboBeforeRender.bind(this);
         this.onPopState = this.onPopState.bind(this);
         this.onTurboBeforeFrameRender = this.onTurboBeforeFrameRender.bind(this);
         this.onTurboBeforeStreamRender = this.onTurboBeforeStreamRender.bind(this);
@@ -46,6 +48,7 @@ export default class extends Controller {
         cachedBaselines.set(this.cacheKey, this.baseline);
         this.dirty = this.snapshot() !== this.baseline;
         this.submitting = false;
+        this.failedSubmission = false;
         this.showStatus();
 
         this.element.addEventListener('input', this.onFormChange);
@@ -53,9 +56,11 @@ export default class extends Controller {
         this.element.addEventListener('reset', this.onFormReset);
         this.element.addEventListener('submit', this.onFormSubmit);
         this.element.addEventListener('turbo:submit-start', this.onTurboSubmitStart);
+        this.element.addEventListener('turbo:before-fetch-response', this.onTurboBeforeFetchResponse);
         this.element.addEventListener('turbo:submit-end', this.onTurboSubmitEnd);
         this.element.ownerDocument.addEventListener('turbo:before-visit', this.onTurboBeforeVisit);
         this.element.ownerDocument.addEventListener('turbo:before-cache', this.onTurboBeforeCache);
+        this.element.ownerDocument.addEventListener('turbo:before-render', this.onTurboBeforeRender);
         this.element.ownerDocument.addEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
         this.element.ownerDocument.addEventListener('turbo:before-stream-render', this.onTurboBeforeStreamRender, true);
         this.element.ownerDocument.defaultView.addEventListener('popstate', this.onPopState, true);
@@ -68,9 +73,11 @@ export default class extends Controller {
         this.element.removeEventListener('reset', this.onFormReset);
         this.element.removeEventListener('submit', this.onFormSubmit);
         this.element.removeEventListener('turbo:submit-start', this.onTurboSubmitStart);
+        this.element.removeEventListener('turbo:before-fetch-response', this.onTurboBeforeFetchResponse);
         this.element.removeEventListener('turbo:submit-end', this.onTurboSubmitEnd);
         this.element.ownerDocument.removeEventListener('turbo:before-visit', this.onTurboBeforeVisit);
         this.element.ownerDocument.removeEventListener('turbo:before-cache', this.onTurboBeforeCache);
+        this.element.ownerDocument.removeEventListener('turbo:before-render', this.onTurboBeforeRender);
         this.element.ownerDocument.removeEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
         this.element.ownerDocument.removeEventListener('turbo:before-stream-render', this.onTurboBeforeStreamRender, true);
         this.element.ownerDocument.defaultView.removeEventListener('popstate', this.onPopState, true);
@@ -99,6 +106,36 @@ export default class extends Controller {
         }
     }
 
+    onTurboBeforeFetchResponse(event) {
+        if (event.target === this.element && this.submitting) {
+            this.failedSubmission = event.detail?.fetchResponse?.succeeded === false;
+        }
+    }
+
+    onTurboBeforeRender(event) {
+        // A 422 validation response replaces the form with fresh HTML. Reuse
+        // the original baseline instead of mistaking the invalid draft for a
+        // successfully saved form. Only propagate it for failed submissions.
+        if (!this.failedSubmission || !event.detail?.newBody) {
+            return;
+        }
+
+        const candidates = [...event.detail.newBody.querySelectorAll('form')];
+        const existing = [...this.element.ownerDocument.querySelectorAll('form')];
+        const identifier = this.element.id;
+        const name = this.element.getAttribute('name');
+        let replacement = identifier
+            ? candidates.find((form) => form.id === identifier)
+            : name
+                ? candidates.find((form) => form.getAttribute('name') === name)
+                : candidates[existing.indexOf(this.element)];
+
+        if (replacement) {
+            replacement.dataset.unsavedFormCacheKey = this.cacheKey;
+        }
+        this.failedSubmission = false;
+    }
+
     onTurboSubmitEnd(event) {
         if (event.target !== this.element) {
             return;
@@ -107,6 +144,7 @@ export default class extends Controller {
         this.submitting = false;
 
         if (event.detail?.success === true) {
+            this.failedSubmission = false;
             this.markClean();
         } else {
             this.refresh();

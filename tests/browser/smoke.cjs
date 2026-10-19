@@ -232,6 +232,23 @@ async function main() {
                 assert.deepEqual(dialogs, []);
             });
 
+            await run('With Turbo: invalid form response must remain dirty', async ({ page, dialogs }) => {
+                await visit(page, '/edit');
+                await page.locator('#edit-form input[type=text]').fill('Draft invalid');
+                await page.evaluate(() => { document.querySelector('#edit-form').action = '/submit-invalid'; });
+                await page.locator('#edit-form #save').click();
+                await page.locator('#validation-error').waitFor();
+                await page.waitForFunction(() => !!window.application?.getControllerForElementAndIdentifier(document.querySelector('#edit-form'), 'guard'));
+                const dirty = await page.evaluate(() => window.application
+                    .getControllerForElementAndIdentifier(document.querySelector('#edit-form'), 'guard')
+                    .refresh());
+                assert.equal(dirty, true, 'A 422 response did not save the form');
+                await page.locator('#nav').click();
+                await pause(150);
+                assert.equal(new URL(page.url()).pathname, '/edit');
+                assert.equal(dialogs.length, 1);
+            });
+
             await run('With Turbo: successful form submission does not warn', async ({ page, dialogs }) => {
                 await visit(page, '/edit');
                 await page.locator('#edit-form input[type=text]').fill('Ready for save');
