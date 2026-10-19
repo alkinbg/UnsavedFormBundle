@@ -15,6 +15,7 @@ The bundle contains one small Stimulus controller. No database tables, backend s
 | Turbo Drive links and programmatic `Turbo.visit()` | Confirm before starting the visit |
 | Turbo Drive Back/Forward | Confirm and reverse cancelable same-document history traversals before Turbo handles their `popstate` event |
 | Turbo Frames (including programmatic `src` updates) | Confirm before replacing a frame containing an edited form |
+| Turbo Streams replacing, updating or removing a dirty form | Confirm before a destructive update; declined updates leave the form intact |
 | Native successful form submission | No false warning when submitting |
 | Turbo form submission | No false warning while submitting; dirty state maintained after an unsuccessful submission where the form is not replaced |
 | Reset or revert to the original values | Form becomes clean again |

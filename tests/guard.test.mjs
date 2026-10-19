@@ -349,6 +349,48 @@ test('Turbo cache restoration keeps the original baseline for dirty forms', asyn
     assert.equal(clone.querySelector('span').hidden, false);
 });
 
+test('Turbo Stream replacement can be declined without losing a dirty form', () => {
+    form.id = 'edit-form';
+    input('title').value = 'Unsaved';
+    let prompts = 0;
+    dom.window.confirm = () => { prompts++; return false; };
+    const stream = dom.window.document.createElement('turbo-stream');
+    stream.setAttribute('action', 'replace');
+    Object.defineProperty(stream, 'targetElements', { value: [form] });
+    dom.window.document.body.append(stream);
+    let replaced = false;
+    const event = new dom.window.CustomEvent('turbo:before-stream-render', {
+        bubbles: true,
+        cancelable: true,
+        detail: { render: () => { replaced = true; } },
+    });
+    stream.dispatchEvent(event);
+    event.detail.render();
+    assert.equal(replaced, false);
+    assert.equal(prompts, 1);
+    assert.equal(input('title').value, 'Unsaved');
+});
+
+test('Turbo Stream updates not affecting the dirty form do not warn', () => {
+    input('title').value = 'Unsaved';
+    dom.window.confirm = () => { throw new Error('Unrelated stream should not warn'); };
+    const target = dom.window.document.createElement('div');
+    dom.window.document.body.append(target);
+    const stream = dom.window.document.createElement('turbo-stream');
+    stream.setAttribute('action', 'update');
+    Object.defineProperty(stream, 'targetElements', { value: [target] });
+    dom.window.document.body.append(stream);
+    let rendered = false;
+    const event = new dom.window.CustomEvent('turbo:before-stream-render', {
+        bubbles: true,
+        cancelable: true,
+        detail: { render: () => { rendered = true; } },
+    });
+    stream.dispatchEvent(event);
+    event.detail.render();
+    assert.equal(rendered, true);
+});
+
 test('Turbo Frame refuses replacing a dirty form without hanging rendering', async () => {
     const frame = dom.window.document.createElement('turbo-frame');
     frame.id = 'editor';

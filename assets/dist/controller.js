@@ -30,6 +30,7 @@ export default class extends Controller {
         this.onTurboBeforeCache = this.onTurboBeforeCache.bind(this);
         this.onPopState = this.onPopState.bind(this);
         this.onTurboBeforeFrameRender = this.onTurboBeforeFrameRender.bind(this);
+        this.onTurboBeforeStreamRender = this.onTurboBeforeStreamRender.bind(this);
         this.onBeforeUnload = this.onBeforeUnload.bind(this);
     }
 
@@ -56,6 +57,7 @@ export default class extends Controller {
         this.element.ownerDocument.addEventListener('turbo:before-visit', this.onTurboBeforeVisit);
         this.element.ownerDocument.addEventListener('turbo:before-cache', this.onTurboBeforeCache);
         this.element.ownerDocument.addEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
+        this.element.ownerDocument.addEventListener('turbo:before-stream-render', this.onTurboBeforeStreamRender, true);
         this.element.ownerDocument.defaultView.addEventListener('popstate', this.onPopState, true);
         this.element.ownerDocument.defaultView.addEventListener('beforeunload', this.onBeforeUnload);
     }
@@ -70,6 +72,7 @@ export default class extends Controller {
         this.element.ownerDocument.removeEventListener('turbo:before-visit', this.onTurboBeforeVisit);
         this.element.ownerDocument.removeEventListener('turbo:before-cache', this.onTurboBeforeCache);
         this.element.ownerDocument.removeEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
+        this.element.ownerDocument.removeEventListener('turbo:before-stream-render', this.onTurboBeforeStreamRender, true);
         this.element.ownerDocument.defaultView.removeEventListener('popstate', this.onPopState, true);
         this.element.ownerDocument.defaultView.removeEventListener('beforeunload', this.onBeforeUnload);
     }
@@ -142,11 +145,17 @@ export default class extends Controller {
             return;
         }
 
-        if (expectedRollbackIndex !== null && currentIndex === expectedRollbackIndex) {
+        if (expectedRollbackIndex !== null) {
+            if (currentIndex === expectedRollbackIndex) {
+                expectedRollbackIndex = null;
+                this.historyIndex = currentIndex;
+                event.stopImmediatePropagation();
+                return;
+            }
+
+            // A different traversal happened before compensation could finish.
+            // Never let a stale rollback marker hide a later real navigation.
             expectedRollbackIndex = null;
-            this.historyIndex = currentIndex;
-            event.stopImmediatePropagation();
-            return;
         }
 
         if (!Number.isInteger(this.historyIndex) || currentIndex === this.historyIndex) {
@@ -195,6 +204,29 @@ export default class extends Controller {
         // The frame's src already points to the refused destination. Clear it
         // so it does not misleadingly report content from that URL.
         event.target.removeAttribute('src');
+    }
+
+    onTurboBeforeStreamRender(event) {
+        // Streams can remove/update/replace a form without changing the URL.
+        // Guard only operations whose targets contain this particular form.
+        const stream = event.target;
+        if (
+            event.defaultPrevented ||
+            !['remove', 'replace', 'update'].includes(stream.getAttribute?.('action')) ||
+            !Array.from(stream.targetElements ?? []).some((target) => target === this.element || target.contains(this.element)) ||
+            this.submitting ||
+            !this.refresh() ||
+            approvedVisits.has(event)
+        ) {
+            return;
+        }
+
+        if (this.element.ownerDocument.defaultView.confirm(this.messageValue)) {
+            approvedVisits.add(event);
+        } else {
+            // Let Turbo finish the stream rather than suspending its pipeline.
+            event.detail.render = () => {};
+        }
     }
 
     onBeforeUnload(event) {

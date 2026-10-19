@@ -171,6 +171,29 @@ async function main() {
                 assert.equal(dialogs.length, 1);
             });
 
+            await run('Turbo Stream: replacement of edited form is guarded', async ({ page, dialogs, approve }) => {
+                await visit(page, '/edit');
+                await page.locator('#edit-form input').fill('Unsaved stream changes');
+                const replace = async () => {
+                    await page.evaluate(() => window.Turbo.renderStreamMessage(
+                        '<turbo-stream action="replace" target="edit-form">' +
+                        '<template><div id="stream-result">Stream replacement</div></template>' +
+                        '</turbo-stream>',
+                    ));
+                };
+
+                await replace();
+                await pause(150);
+                assert.equal(dialogs.length, 1);
+                assert.equal(await page.locator('#edit-form input').inputValue(), 'Unsaved stream changes');
+                assert.equal(await page.locator('#stream-result').count(), 0);
+
+                approve();
+                await replace();
+                await page.locator('#stream-result').waitFor();
+                assert.equal(dialogs.length, 2);
+            });
+
             await run('Turbo-disabled link: native beforeunload is invoked', async ({ page, dialogs, approve }) => {
                 await visit(page, '/edit');
                 await page.locator('#edit-form input').fill('Native dirty');
