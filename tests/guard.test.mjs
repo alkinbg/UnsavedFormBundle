@@ -281,38 +281,72 @@ test('listeners are removed when the form disconnects', async () => {
     assert.equal(unloadEvent().defaultPrevented, false);
 });
 
-test('Navigation API cancels same-document Back/Forward traversal when dirty', () => {
-    const navigation = new dom.window.EventTarget();
-    dom.window.navigation = navigation;
-    // Existing controller connected before navigation was assigned, so connect
-    // the browser listener directly to exercise the event behavior.
-    navigation.addEventListener('navigate', guard.onNavigation);
-    let prompts = 0;
-    dom.window.confirm = () => { prompts++; return false; };
+test('declined Back/Forward popstate is reversed before Turbo sees it', () => {
+    dom.window.navigation = { currentEntry: { index: 3 } };
+    guard.historyIndex = 2;
+    const historyDeltas = [];
+    dom.window.history.go = (delta) => historyDeltas.push(delta);
     input('title').value = 'Changed';
-    const event = new dom.window.Event('navigate', { cancelable: true });
-    Object.assign(event, {
-        navigationType: 'traverse',
-        destination: { sameDocument: true },
-        hashChange: false,
-    });
-    navigation.dispatchEvent(event);
-    assert.equal(event.defaultPrevented, true);
-    assert.equal(prompts, 1);
-    navigation.removeEventListener('navigate', guard.onNavigation);
+    let dialogs = 0;
+    dom.window.confirm = () => { dialogs++; return false; };
+    let turboPopstates = 0;
+    dom.window.addEventListener('popstate', () => { turboPopstates++; });
+
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.deepEqual(historyDeltas, [-1]);
+    assert.equal(turboPopstates, 0);
+    assert.equal(dialogs, 1);
+
+    dom.window.navigation.currentEntry.index = 2;
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.equal(turboPopstates, 0);
+    assert.equal(dialogs, 1);
+
+    dom.window.confirm = () => { dialogs++; return true; };
+    dom.window.navigation.currentEntry.index = 3;
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.equal(turboPopstates, 1);
+    assert.equal(dialogs, 2);
 });
 
-test('Navigation API ignores full-page history traversal to avoid double prompts', () => {
-    const event = new dom.window.Event('navigate', { cancelable: true });
-    Object.assign(event, {
-        navigationType: 'traverse',
-        destination: { sameDocument: false },
-        hashChange: false,
-    });
-    input('title').value = 'Changed';
-    dom.window.confirm = () => { throw new Error('A cross-document visit must use beforeunload'); };
-    guard.onNavigation(event);
-    assert.equal(event.defaultPrevented, false);
+test('denied backward popstate rolls forward without rendering', () => {
+    dom.window.navigation = { currentEntry: { index: 1 } };
+    guard.historyIndex = 3;
+    const deltas = [];
+    dom.window.history.go = (delta) => deltas.push(delta);
+    input('title').value = 'Unsaved';
+    dom.window.confirm = () => false;
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.deepEqual(deltas, [2]);
+    dom.window.navigation.currentEntry.index = 3;
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.equal(guard.historyIndex, 3);
+});
+
+test('popstate on a clean form does not prompt', () => {
+    dom.window.navigation = { currentEntry: { index: 1 } };
+    guard.historyIndex = 0;
+    dom.window.confirm = () => { throw new Error('Clean forms should not show dialogs'); };
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.equal(guard.historyIndex, 1);
+});
+
+test('Turbo cache restoration keeps the original baseline for dirty forms', async () => {
+    input('title').value = 'Unsent draft';
+    dispatchInput(input('title'));
+    assert.equal(guard.refresh(), true);
+
+    document.dispatchEvent(new dom.window.Event('turbo:before-cache'));
+    const clone = form.cloneNode(true);
+    form.replaceWith(clone);
+    await tick();
+
+    const restored = application.getControllerForElementAndIdentifier(clone, identifier);
+    assert.ok(restored);
+    assert.equal(clone.elements.namedItem('title').value, 'Unsent draft');
+    assert.equal(restored.refresh(), true);
+    assert.equal(restored.baseline, guard.baseline);
+    assert.equal(clone.querySelector('span').hidden, false);
 });
 
 test('Turbo Frame refuses replacing a dirty form without hanging rendering', async () => {

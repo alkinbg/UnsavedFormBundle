@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        browser: [webkit]
+        browser: [chromium, firefox, webkit]
     env:
       UNSAVED_BROWSER: ${{ matrix.browser }}
     steps:

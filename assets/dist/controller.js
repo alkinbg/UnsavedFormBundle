@@ -2,6 +2,13 @@ import { Controller } from '@hotwired/stimulus';
 
 // A single Turbo visit may encounter several dirty forms. Ask only once.
 const approvedVisits = new WeakSet();
+// A denied popstate is undone before Turbo's own popstate listener runs.
+// Swallow the compensating popstate as well: Turbo has not left the original page.
+let expectedRollbackIndex = null;
+// Turbo caches cloned form nodes. Keep the original comparison baseline in
+// memory so a restored dirty form does not incorrectly become pristine.
+const cachedBaselines = new Map();
+let nextCacheKey = 0;
 
 export default class extends Controller {
     static targets = ['indicator'];
@@ -20,7 +27,8 @@ export default class extends Controller {
         this.onTurboSubmitStart = this.onTurboSubmitStart.bind(this);
         this.onTurboSubmitEnd = this.onTurboSubmitEnd.bind(this);
         this.onTurboBeforeVisit = this.onTurboBeforeVisit.bind(this);
-        this.onNavigation = this.onNavigation.bind(this);
+        this.onTurboBeforeCache = this.onTurboBeforeCache.bind(this);
+        this.onPopState = this.onPopState.bind(this);
         this.onTurboBeforeFrameRender = this.onTurboBeforeFrameRender.bind(this);
         this.onBeforeUnload = this.onBeforeUnload.bind(this);
     }
@@ -30,8 +38,12 @@ export default class extends Controller {
             throw new TypeError('Unsaved Form must be attached to a <form> element.');
         }
 
-        this.baseline = this.snapshot();
-        this.dirty = false;
+        this.historyIndex = this.element.ownerDocument.defaultView.navigation?.currentEntry?.index ?? null;
+        this.cacheKey = this.element.dataset.unsavedFormCacheKey || `unsaved-form-${++nextCacheKey}`;
+        this.element.dataset.unsavedFormCacheKey = this.cacheKey;
+        this.baseline = cachedBaselines.get(this.cacheKey) ?? this.snapshot();
+        cachedBaselines.set(this.cacheKey, this.baseline);
+        this.dirty = this.snapshot() !== this.baseline;
         this.submitting = false;
         this.showStatus();
 
@@ -42,8 +54,9 @@ export default class extends Controller {
         this.element.addEventListener('turbo:submit-start', this.onTurboSubmitStart);
         this.element.addEventListener('turbo:submit-end', this.onTurboSubmitEnd);
         this.element.ownerDocument.addEventListener('turbo:before-visit', this.onTurboBeforeVisit);
+        this.element.ownerDocument.addEventListener('turbo:before-cache', this.onTurboBeforeCache);
         this.element.ownerDocument.addEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
-        this.element.ownerDocument.defaultView.navigation?.addEventListener('navigate', this.onNavigation);
+        this.element.ownerDocument.defaultView.addEventListener('popstate', this.onPopState, true);
         this.element.ownerDocument.defaultView.addEventListener('beforeunload', this.onBeforeUnload);
     }
 
@@ -55,8 +68,9 @@ export default class extends Controller {
         this.element.removeEventListener('turbo:submit-start', this.onTurboSubmitStart);
         this.element.removeEventListener('turbo:submit-end', this.onTurboSubmitEnd);
         this.element.ownerDocument.removeEventListener('turbo:before-visit', this.onTurboBeforeVisit);
+        this.element.ownerDocument.removeEventListener('turbo:before-cache', this.onTurboBeforeCache);
         this.element.ownerDocument.removeEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
-        this.element.ownerDocument.defaultView.navigation?.removeEventListener('navigate', this.onNavigation);
+        this.element.ownerDocument.defaultView.removeEventListener('popstate', this.onPopState, true);
         this.element.ownerDocument.defaultView.removeEventListener('beforeunload', this.onBeforeUnload);
     }
 
@@ -113,29 +127,48 @@ export default class extends Controller {
         approvedVisits.add(event);
     }
 
-    onNavigation(event) {
-        // Turbo restoration visits (Back/Forward) do not fire turbo:before-visit.
-        // The modern Navigation API can cancel eligible same-document traversals
-        // before the history position changes. Full-page navigations continue
-        // to use the browser's native beforeunload confirmation.
-        if (
-            event.defaultPrevented ||
-            event.navigationType !== 'traverse' ||
-            !event.destination?.sameDocument ||
-            event.hashChange ||
-            !event.cancelable ||
-            this.submitting ||
-            !this.refresh() ||
-            approvedVisits.has(event)
-        ) {
+    onTurboBeforeCache() {
+        cachedBaselines.set(this.cacheKey, this.baseline);
+    }
+
+    onPopState(event) {
+        // Turbo Drive handles restoration visits on popstate. We run in capture
+        // phase so a declined traversal can be reversed BEFORE Turbo starts it.
+        // Unlike Navigation API preventDefault(), this also permits a later
+        // Back/Forward retry in WebKit.
+        const win = this.element.ownerDocument.defaultView;
+        const currentIndex = win.navigation?.currentEntry?.index;
+        if (!Number.isInteger(currentIndex)) {
             return;
         }
 
-        if (this.element.ownerDocument.defaultView.confirm(this.messageValue)) {
-            approvedVisits.add(event);
-        } else {
-            event.preventDefault();
+        if (expectedRollbackIndex !== null && currentIndex === expectedRollbackIndex) {
+            expectedRollbackIndex = null;
+            this.historyIndex = currentIndex;
+            event.stopImmediatePropagation();
+            return;
         }
+
+        if (!Number.isInteger(this.historyIndex) || currentIndex === this.historyIndex) {
+            this.historyIndex = currentIndex;
+            return;
+        }
+
+        if (this.submitting || !this.refresh() || approvedVisits.has(event)) {
+            this.historyIndex = currentIndex;
+            return;
+        }
+
+        if (win.confirm(this.messageValue)) {
+            approvedVisits.add(event);
+            this.historyIndex = currentIndex;
+            return;
+        }
+
+        const delta = this.historyIndex - currentIndex;
+        expectedRollbackIndex = this.historyIndex;
+        event.stopImmediatePropagation();
+        win.history.go(delta);
     }
 
     onTurboBeforeFrameRender(event) {
@@ -177,6 +210,7 @@ export default class extends Controller {
     // Applications using AJAX without Turbo can call this after a confirmed save.
     markClean() {
         this.baseline = this.snapshot();
+        cachedBaselines.set(this.cacheKey, this.baseline);
         this.submitting = false;
         this.refresh();
     }

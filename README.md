@@ -13,7 +13,7 @@ The bundle contains one small Stimulus controller. No database tables, backend s
 | Ordinary links and page reload (no Turbo) | Native browser `beforeunload` confirmation |
 | Closing a tab or browser | Native `beforeunload` where supported by the browser |
 | Turbo Drive links and programmatic `Turbo.visit()` | Confirm before starting the visit |
-| Turbo Drive Back/Forward | Confirm and cancel eligible same-document history traversals through the Navigation API |
+| Turbo Drive Back/Forward | Confirm and reverse cancelable same-document history traversals before Turbo handles their `popstate` event |
 | Turbo Frames (including programmatic `src` updates) | Confirm before replacing a frame containing an edited form |
 | Native successful form submission | No false warning when submitting |
 | Turbo form submission | No false warning while submitting; dirty state maintained after an unsuccessful submission where the form is not replaced |
@@ -71,7 +71,7 @@ The controller is loaded automatically and works with or without Symfony UX Turb
 
 **A website cannot guarantee a confirmation on every OS- or browser-initiated termination.** For example, mobile browsers may skip `beforeunload` when an app is force-closed. Browsers control the native confirmation text and may require previous user interaction; our JavaScript cannot override these policies.
 
-Turbo restoration visits do not fire `turbo:before-visit`. The bundle uses the standard browser Navigation API for same-document Back/Forward visits where they are cancelable. Older browsers without that support cannot provide exactly the same guarantees. The automated browser tests cover modern Chromium, Firefox, and WebKit.
+Turbo restoration visits do not fire `turbo:before-visit`. The bundle uses the Navigation API history-entry index to reverse declined Back/Forward traversal at `popstate`, then preserves the original form baseline across Turbo cache restorations, where the index is available. Browser versions without a history-entry index require a fallback and cannot currently offer the same behavior. The automated browser tests cover modern Chromium, Firefox, and WebKit.
 
 Turbo Frame navigation is guarded immediately before rendering. When a user declines, the new frame content is not rendered and the frame's `src` is cleared because it no longer represents the visible frame content.
 

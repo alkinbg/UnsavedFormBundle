@@ -106,19 +106,17 @@ async function main() {
                 assert.equal(await page.locator('#edit-form input').inputValue(), 'Dirty after back');
                 assert.equal(dialogs.length, 1);
 
-                if (browserName === 'webkit') console.log('BEFORE_ACCEPT', await page.evaluate(() => ({url:location.href,current:navigation.currentEntry?.url,entries:navigation.entries().map(e=>e.url),forward:navigation.canGoForward})));
                 approve();
-                await page.evaluate((retryHistory) => {
-                    window.__webkitHistoryRetry = retryHistory;
-                    window.__navigationDebug=[];
-                    navigation.addEventListener('navigate', e => window.__navigationDebug.push({type:e.navigationType,cancelable:e.cancelable,sameDocument:e.destination?.sameDocument,destination:e.destination?.url}));
-                    if (window.__webkitHistoryRetry) { history.forward(); }
-                    else { navigation.forward().committed.then(() => window.__navigationDebug.push('committed')).catch(e => window.__navigationDebug.push('rejected '+e.message)); }
-                }, browserName === 'webkit');
-                await page.waitForTimeout(650);
-                if (browserName === 'webkit') console.log('AFTER_ACCEPT', await page.evaluate(() => ({url:location.href,current:navigation.currentEntry?.url,entries:navigation.entries().map(e=>e.url),forward:navigation.canGoForward,events:window.__navigationDebug})), dialogs);
+                // Retry through the browser History API after declining once.
+                // This exposes WebKit cancellation bugs that Navigation API-only
+                // checks miss.
+                await page.evaluate(() => history.forward());
                 await page.waitForURL('**/other');
+                // URL changes before Turbo finishes its popstate handling.
+                // Wait for the prompt and the destination DOM, not only the URL.
+                for (let n = 0; n < 50 && dialogs.length < 2; n++) await pause(20);
                 assert.equal(dialogs.length, 2);
+                await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'OTHER');
             });
 
             await run('Turbo Frame: click navigation can be declined then accepted', async ({ page, dialogs, approve }) => {
