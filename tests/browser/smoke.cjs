@@ -106,8 +106,15 @@ async function main() {
                 assert.equal(await page.locator('#edit-form input').inputValue(), 'Dirty after back');
                 assert.equal(dialogs.length, 1);
 
+                if (browserName === 'webkit') console.log('BEFORE_ACCEPT', await page.evaluate(() => ({url:location.href,current:navigation.currentEntry?.url,entries:navigation.entries().map(e=>e.url),forward:navigation.canGoForward})));
                 approve();
-                await page.evaluate(() => navigation.forward().committed.catch(() => {}));
+                await page.evaluate(() => {
+                    window.__navigationDebug=[];
+                    navigation.addEventListener('navigate', e => window.__navigationDebug.push({type:e.navigationType,cancelable:e.cancelable,sameDocument:e.destination?.sameDocument,destination:e.destination?.url}));
+                    navigation.forward().committed.then(() => window.__navigationDebug.push('committed')).catch(e => window.__navigationDebug.push('rejected '+e.message));
+                });
+                await page.waitForTimeout(650);
+                if (browserName === 'webkit') console.log('AFTER_ACCEPT', await page.evaluate(() => ({url:location.href,current:navigation.currentEntry?.url,entries:navigation.entries().map(e=>e.url),forward:navigation.canGoForward,events:window.__navigationDebug})), dialogs);
                 await page.waitForURL('**/other');
                 assert.equal(dialogs.length, 2);
             });
