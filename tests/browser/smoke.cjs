@@ -108,11 +108,13 @@ async function main() {
 
                 if (browserName === 'webkit') console.log('BEFORE_ACCEPT', await page.evaluate(() => ({url:location.href,current:navigation.currentEntry?.url,entries:navigation.entries().map(e=>e.url),forward:navigation.canGoForward})));
                 approve();
-                await page.evaluate(() => {
+                await page.evaluate((retryHistory) => {
+                    window.__webkitHistoryRetry = retryHistory;
                     window.__navigationDebug=[];
                     navigation.addEventListener('navigate', e => window.__navigationDebug.push({type:e.navigationType,cancelable:e.cancelable,sameDocument:e.destination?.sameDocument,destination:e.destination?.url}));
-                    navigation.forward().committed.then(() => window.__navigationDebug.push('committed')).catch(e => window.__navigationDebug.push('rejected '+e.message));
-                });
+                    if (window.__webkitHistoryRetry) { history.forward(); }
+                    else { navigation.forward().committed.then(() => window.__navigationDebug.push('committed')).catch(e => window.__navigationDebug.push('rejected '+e.message)); }
+                }, browserName === 'webkit');
                 await page.waitForTimeout(650);
                 if (browserName === 'webkit') console.log('AFTER_ACCEPT', await page.evaluate(() => ({url:location.href,current:navigation.currentEntry?.url,entries:navigation.entries().map(e=>e.url),forward:navigation.canGoForward,events:window.__navigationDebug})), dialogs);
                 await page.waitForURL('**/other');
