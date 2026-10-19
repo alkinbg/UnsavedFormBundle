@@ -119,6 +119,29 @@ async function main() {
                 await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'OTHER');
             });
 
+            await run('Turbo Back: rejected then accepted without losing edits', async ({ page, dialogs, approve }) => {
+                await visit(page, '/edit');
+                await page.locator('#nav').click();
+                await page.waitForURL('**/other');
+                await page.locator('#return').click();
+                await page.waitForURL('**/edit');
+                await page.waitForFunction(() => !!window.application?.getControllerForElementAndIdentifier(document.querySelector('#edit-form'), 'guard'));
+                await page.locator('#edit-form input').fill('Dirty when going Back');
+
+                await page.evaluate(() => history.back());
+                await pause(350);
+                assert.equal(new URL(page.url()).pathname, '/edit');
+                assert.equal(await page.locator('#edit-form input').inputValue(), 'Dirty when going Back');
+                assert.equal(dialogs.length, 1);
+
+                approve();
+                await page.evaluate(() => history.back());
+                await page.waitForURL('**/other');
+                for (let n = 0; n < 50 && dialogs.length < 2; n++) await pause(20);
+                assert.equal(dialogs.length, 2);
+                await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'OTHER');
+            });
+
             await run('Turbo Frame: click navigation can be declined then accepted', async ({ page, dialogs, approve }) => {
                 await visit(page, '/edit');
                 await page.locator('#frame-form input').waitFor();
