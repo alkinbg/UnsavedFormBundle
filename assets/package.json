@@ -1,0 +1,21 @@
+{
+  "name": "@alkin/unsaved-form-bundle",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "symfony": {
+    "controllers": {
+      "guard": {
+        "main": "dist/controller.js",
+        "fetch": "eager",
+        "enabled": true
+      }
+    },
+    "importmap": {
+      "@hotwired/stimulus": "^3.2.0"
+    }
+  },
+  "peerDependencies": {
+    "@hotwired/stimulus": "^3.2.0"
+  }
+}
