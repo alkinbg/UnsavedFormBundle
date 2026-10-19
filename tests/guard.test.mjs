@@ -280,3 +280,219 @@ test('listeners are removed when the form disconnects', async () => {
     await tick();
     assert.equal(unloadEvent().defaultPrevented, false);
 });
+
+test('declined Back/Forward popstate is reversed before Turbo sees it', () => {
+    dom.window.navigation = { currentEntry: { index: 3 } };
+    guard.historyIndex = 2;
+    const historyDeltas = [];
+    dom.window.history.go = (delta) => historyDeltas.push(delta);
+    input('title').value = 'Changed';
+    let dialogs = 0;
+    dom.window.confirm = () => { dialogs++; return false; };
+    let turboPopstates = 0;
+    dom.window.addEventListener('popstate', () => { turboPopstates++; });
+
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.deepEqual(historyDeltas, [-1]);
+    assert.equal(turboPopstates, 0);
+    assert.equal(dialogs, 1);
+
+    dom.window.navigation.currentEntry.index = 2;
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.equal(turboPopstates, 0);
+    assert.equal(dialogs, 1);
+
+    dom.window.confirm = () => { dialogs++; return true; };
+    dom.window.navigation.currentEntry.index = 3;
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.equal(turboPopstates, 1);
+    assert.equal(dialogs, 2);
+});
+
+test('denied backward popstate rolls forward without rendering', () => {
+    dom.window.navigation = { currentEntry: { index: 1 } };
+    guard.historyIndex = 3;
+    const deltas = [];
+    dom.window.history.go = (delta) => deltas.push(delta);
+    input('title').value = 'Unsaved';
+    dom.window.confirm = () => false;
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.deepEqual(deltas, [2]);
+    dom.window.navigation.currentEntry.index = 3;
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.equal(guard.historyIndex, 3);
+});
+
+test('popstate on a clean form does not prompt', () => {
+    dom.window.navigation = { currentEntry: { index: 1 } };
+    guard.historyIndex = 0;
+    dom.window.confirm = () => { throw new Error('Clean forms should not show dialogs'); };
+    dom.window.dispatchEvent(new dom.window.Event('popstate'));
+    assert.equal(guard.historyIndex, 1);
+});
+
+test('Turbo cache restoration keeps the original baseline for dirty forms', async () => {
+    input('title').value = 'Unsent draft';
+    dispatchInput(input('title'));
+    assert.equal(guard.refresh(), true);
+
+    document.dispatchEvent(new dom.window.Event('turbo:before-cache'));
+    const clone = form.cloneNode(true);
+    form.replaceWith(clone);
+    await tick();
+
+    const restored = application.getControllerForElementAndIdentifier(clone, identifier);
+    assert.ok(restored);
+    assert.equal(clone.elements.namedItem('title').value, 'Unsent draft');
+    assert.equal(restored.refresh(), true);
+    assert.equal(restored.baseline, guard.baseline);
+    assert.equal(clone.querySelector('span').hidden, false);
+});
+
+test('Turbo 422 response carries dirty baseline into a newly rendered form', async () => {
+    form.id = 'edit-form';
+    input('title').value = 'Draft invalid';
+    dispatchInput(input('title'));
+    const original = guard.baseline;
+
+    form.dispatchEvent(new dom.window.CustomEvent('turbo:submit-start', { bubbles: true }));
+    form.dispatchEvent(new dom.window.CustomEvent('turbo:before-fetch-response', {
+        bubbles: true,
+        detail: { fetchResponse: { succeeded: false, statusCode: 422 } },
+    }));
+    form.dispatchEvent(new dom.window.CustomEvent('turbo:submit-end', {
+        bubbles: true,
+        detail: { success: false },
+    }));
+
+    const newBody = dom.window.document.createElement('body');
+    newBody.innerHTML = formMarkup.replace('<form ', '<form id="edit-form" ').replace('value="Original"', 'value="Draft invalid"');
+    const replacement = newBody.querySelector('form');
+    dom.window.document.dispatchEvent(new dom.window.CustomEvent('turbo:before-render', {
+        bubbles: true,
+        detail: { newBody },
+    }));
+
+    assert.equal(replacement.dataset.unsavedFormCacheKey, guard.cacheKey);
+    form.replaceWith(replacement);
+    await tick();
+
+    const nextController = application.getControllerForElementAndIdentifier(replacement, identifier);
+    assert.ok(nextController);
+    assert.equal(nextController.baseline, original);
+    assert.equal(nextController.refresh(), true);
+});
+
+test('Turbo Stream replacement can be declined without losing a dirty form', () => {
+    form.id = 'edit-form';
+    input('title').value = 'Unsaved';
+    let prompts = 0;
+    dom.window.confirm = () => { prompts++; return false; };
+    const stream = dom.window.document.createElement('turbo-stream');
+    stream.setAttribute('action', 'replace');
+    Object.defineProperty(stream, 'targetElements', { value: [form] });
+    dom.window.document.body.append(stream);
+    let replaced = false;
+    const event = new dom.window.CustomEvent('turbo:before-stream-render', {
+        bubbles: true,
+        cancelable: true,
+        detail: { render: () => { replaced = true; } },
+    });
+    stream.dispatchEvent(event);
+    event.detail.render();
+    assert.equal(replaced, false);
+    assert.equal(prompts, 1);
+    assert.equal(input('title').value, 'Unsaved');
+});
+
+test('Turbo Stream updates not affecting the dirty form do not warn', () => {
+    input('title').value = 'Unsaved';
+    dom.window.confirm = () => { throw new Error('Unrelated stream should not warn'); };
+    const target = dom.window.document.createElement('div');
+    dom.window.document.body.append(target);
+    const stream = dom.window.document.createElement('turbo-stream');
+    stream.setAttribute('action', 'update');
+    Object.defineProperty(stream, 'targetElements', { value: [target] });
+    dom.window.document.body.append(stream);
+    let rendered = false;
+    const event = new dom.window.CustomEvent('turbo:before-stream-render', {
+        bubbles: true,
+        cancelable: true,
+        detail: { render: () => { rendered = true; } },
+    });
+    stream.dispatchEvent(event);
+    event.detail.render();
+    assert.equal(rendered, true);
+});
+
+test('Turbo Frame refuses replacing a dirty form without hanging rendering', async () => {
+    const frame = dom.window.document.createElement('turbo-frame');
+    frame.id = 'editor';
+    form.before(frame);
+    frame.append(form);
+    await tick();
+    guard = application.getControllerForElementAndIdentifier(form, identifier);
+    assert.ok(guard);
+
+    input('title').value = 'Dirty frame';
+    frame.setAttribute('src', '/other');
+    dom.window.confirm = () => false;
+    let didRender = false;
+    const event = new dom.window.CustomEvent('turbo:before-frame-render', {
+        cancelable: true,
+        bubbles: true,
+        detail: { render: () => { didRender = true; } },
+    });
+    frame.dispatchEvent(event);
+    event.detail.render();
+    assert.equal(didRender, false);
+    assert.equal(form.isConnected, true);
+    assert.equal(input('title').value, 'Dirty frame');
+    assert.equal(frame.hasAttribute('src'), false);
+});
+
+test('Turbo Frame visits outside the dirty form do not prompt', () => {
+    const otherFrame = dom.window.document.createElement('turbo-frame');
+    dom.window.document.body.append(otherFrame);
+    input('title').value = 'Dirty';
+    dom.window.confirm = () => { throw new Error('Unrelated frame must not warn'); };
+    const renderer = () => {};
+    const event = new dom.window.CustomEvent('turbo:before-frame-render', {
+        cancelable: true,
+        bubbles: true,
+        detail: { render: renderer },
+    });
+    otherFrame.dispatchEvent(event);
+    assert.equal(event.detail.render, renderer);
+});
+
+test('Turbo cache restoration retains previously edited values', async () => {
+    const cached = form.cloneNode(true);
+    input('title').value = 'Unsaved draft';
+    dispatchInput(input('title'));
+    assert.equal(guard.refresh(), true);
+    assert.equal(cached.elements.namedItem('title').value, 'Original');
+
+    form.replaceWith(cached);
+    await tick();
+    const replacementController = application.getControllerForElementAndIdentifier(cached, identifier);
+    assert.ok(replacementController);
+    assert.equal(cached.elements.namedItem('title').value, 'Unsaved draft');
+    assert.equal(replacementController.refresh(), true);
+});
+
+test('reverting changes clears the draft before Turbo restores the form', async () => {
+    const cached = form.cloneNode(true);
+    input('title').value = 'Temporary';
+    dispatchInput(input('title'));
+    input('title').value = 'Original';
+    dispatchInput(input('title'));
+    assert.equal(guard.refresh(), false);
+
+    form.replaceWith(cached);
+    await tick();
+    const replacementController = application.getControllerForElementAndIdentifier(cached, identifier);
+    assert.ok(replacementController);
+    assert.equal(cached.elements.namedItem('title').value, 'Original');
+    assert.equal(replacementController.refresh(), false);
+});

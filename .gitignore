@@ -4,3 +4,5 @@
 /.phpunit.cache/
 /.env.local
 .DS_Store
+
+/tests/browser/*.bundle.js

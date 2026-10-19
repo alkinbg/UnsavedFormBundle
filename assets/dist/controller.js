@@ -2,6 +2,16 @@ import { Controller } from '@hotwired/stimulus';
 
 // A single Turbo visit may encounter several dirty forms. Ask only once.
 const approvedVisits = new WeakSet();
+// A denied popstate is undone before Turbo's own popstate listener runs.
+// Swallow the compensating popstate as well: Turbo has not left the original page.
+let expectedRollbackIndex = null;
+// Turbo caches cloned form nodes. Keep the original comparison baseline in
+// memory so a restored dirty form does not incorrectly become pristine.
+const cachedBaselines = new Map();
+const cachedBaselineFields = new Map();
+const cachedDraftFields = new Map();
+const keysByDocument = new WeakMap();
+let nextCacheKey = 0;
 
 export default class extends Controller {
     static targets = ['indicator'];
@@ -20,6 +30,12 @@ export default class extends Controller {
         this.onTurboSubmitStart = this.onTurboSubmitStart.bind(this);
         this.onTurboSubmitEnd = this.onTurboSubmitEnd.bind(this);
         this.onTurboBeforeVisit = this.onTurboBeforeVisit.bind(this);
+        this.onTurboBeforeCache = this.onTurboBeforeCache.bind(this);
+        this.onTurboBeforeFetchResponse = this.onTurboBeforeFetchResponse.bind(this);
+        this.onTurboBeforeRender = this.onTurboBeforeRender.bind(this);
+        this.onPopState = this.onPopState.bind(this);
+        this.onTurboBeforeFrameRender = this.onTurboBeforeFrameRender.bind(this);
+        this.onTurboBeforeStreamRender = this.onTurboBeforeStreamRender.bind(this);
         this.onBeforeUnload = this.onBeforeUnload.bind(this);
     }
 
@@ -28,9 +44,28 @@ export default class extends Controller {
             throw new TypeError('Unsaved Form must be attached to a <form> element.');
         }
 
-        this.baseline = this.snapshot();
-        this.dirty = false;
+        const win = this.element.ownerDocument.defaultView;
+        this.historyIndex = win.navigation?.currentEntry?.index ?? null;
+        const identity = `${win.location.pathname}${win.location.search}|${this.element.id || this.element.name || [...win.document.forms].indexOf(this.element)}`;
+        let documentKeys = keysByDocument.get(this.element.ownerDocument);
+        if (!documentKeys) {
+            documentKeys = new Map();
+            keysByDocument.set(this.element.ownerDocument, documentKeys);
+        }
+        this.cacheKey = this.element.dataset.unsavedFormCacheKey || documentKeys.get(identity) || `unsaved-form-${++nextCacheKey}`;
+        documentKeys.set(identity, this.cacheKey);
+        this.element.dataset.unsavedFormCacheKey = this.cacheKey;
+        this.baseline = cachedBaselines.get(this.cacheKey) ?? this.snapshot();
+        cachedBaselines.set(this.cacheKey, this.baseline);
+        this.baselineFields = cachedBaselineFields.get(this.cacheKey) ?? this.readFields();
+        cachedBaselineFields.set(this.cacheKey, this.baselineFields);
+        const draft = cachedDraftFields.get(this.cacheKey);
+        if (draft) {
+            this.restoreFields(draft);
+        }
+        this.dirty = this.snapshot() !== this.baseline;
         this.submitting = false;
+        this.failedSubmission = false;
         this.showStatus();
 
         this.element.addEventListener('input', this.onFormChange);
@@ -38,8 +73,14 @@ export default class extends Controller {
         this.element.addEventListener('reset', this.onFormReset);
         this.element.addEventListener('submit', this.onFormSubmit);
         this.element.addEventListener('turbo:submit-start', this.onTurboSubmitStart);
+        this.element.addEventListener('turbo:before-fetch-response', this.onTurboBeforeFetchResponse);
         this.element.addEventListener('turbo:submit-end', this.onTurboSubmitEnd);
         this.element.ownerDocument.addEventListener('turbo:before-visit', this.onTurboBeforeVisit);
+        this.element.ownerDocument.addEventListener('turbo:before-cache', this.onTurboBeforeCache);
+        this.element.ownerDocument.addEventListener('turbo:before-render', this.onTurboBeforeRender);
+        this.element.ownerDocument.addEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
+        this.element.ownerDocument.addEventListener('turbo:before-stream-render', this.onTurboBeforeStreamRender, true);
+        this.element.ownerDocument.defaultView.addEventListener('popstate', this.onPopState, true);
         this.element.ownerDocument.defaultView.addEventListener('beforeunload', this.onBeforeUnload);
     }
 
@@ -49,8 +90,14 @@ export default class extends Controller {
         this.element.removeEventListener('reset', this.onFormReset);
         this.element.removeEventListener('submit', this.onFormSubmit);
         this.element.removeEventListener('turbo:submit-start', this.onTurboSubmitStart);
+        this.element.removeEventListener('turbo:before-fetch-response', this.onTurboBeforeFetchResponse);
         this.element.removeEventListener('turbo:submit-end', this.onTurboSubmitEnd);
         this.element.ownerDocument.removeEventListener('turbo:before-visit', this.onTurboBeforeVisit);
+        this.element.ownerDocument.removeEventListener('turbo:before-cache', this.onTurboBeforeCache);
+        this.element.ownerDocument.removeEventListener('turbo:before-render', this.onTurboBeforeRender);
+        this.element.ownerDocument.removeEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
+        this.element.ownerDocument.removeEventListener('turbo:before-stream-render', this.onTurboBeforeStreamRender, true);
+        this.element.ownerDocument.defaultView.removeEventListener('popstate', this.onPopState, true);
         this.element.ownerDocument.defaultView.removeEventListener('beforeunload', this.onBeforeUnload);
     }
 
@@ -76,6 +123,36 @@ export default class extends Controller {
         }
     }
 
+    onTurboBeforeFetchResponse(event) {
+        if (event.target === this.element && this.submitting) {
+            this.failedSubmission = event.detail?.fetchResponse?.succeeded === false;
+        }
+    }
+
+    onTurboBeforeRender(event) {
+        // A 422 validation response replaces the form with fresh HTML. Reuse
+        // the original baseline instead of mistaking the invalid draft for a
+        // successfully saved form. Only propagate it for failed submissions.
+        if (!this.failedSubmission || !event.detail?.newBody) {
+            return;
+        }
+
+        const candidates = [...event.detail.newBody.querySelectorAll('form')];
+        const existing = [...this.element.ownerDocument.querySelectorAll('form')];
+        const identifier = this.element.id;
+        const name = this.element.getAttribute('name');
+        let replacement = identifier
+            ? candidates.find((form) => form.id === identifier)
+            : name
+                ? candidates.find((form) => form.getAttribute('name') === name)
+                : candidates[existing.indexOf(this.element)];
+
+        if (replacement) {
+            replacement.dataset.unsavedFormCacheKey = this.cacheKey;
+        }
+        this.failedSubmission = false;
+    }
+
     onTurboSubmitEnd(event) {
         if (event.target !== this.element) {
             return;
@@ -84,6 +161,7 @@ export default class extends Controller {
         this.submitting = false;
 
         if (event.detail?.success === true) {
+            this.failedSubmission = false;
             this.markClean();
         } else {
             this.refresh();
@@ -107,6 +185,106 @@ export default class extends Controller {
         approvedVisits.add(event);
     }
 
+    onTurboBeforeCache() {
+        this.refresh();
+        cachedBaselines.set(this.cacheKey, this.baseline);
+    }
+
+    onPopState(event) {
+        // Turbo Drive handles restoration visits on popstate. We run in capture
+        // phase so a declined traversal can be reversed BEFORE Turbo starts it.
+        // Unlike Navigation API preventDefault(), this also permits a later
+        // Back/Forward retry in WebKit.
+        const win = this.element.ownerDocument.defaultView;
+        const currentIndex = win.navigation?.currentEntry?.index;
+        if (!Number.isInteger(currentIndex)) {
+            return;
+        }
+
+        if (expectedRollbackIndex !== null) {
+            if (currentIndex === expectedRollbackIndex) {
+                expectedRollbackIndex = null;
+                this.historyIndex = currentIndex;
+                event.stopImmediatePropagation();
+                return;
+            }
+
+            // A different traversal happened before compensation could finish.
+            // Never let a stale rollback marker hide a later real navigation.
+            expectedRollbackIndex = null;
+        }
+
+        if (!Number.isInteger(this.historyIndex) || currentIndex === this.historyIndex) {
+            this.historyIndex = currentIndex;
+            return;
+        }
+
+        if (this.submitting || !this.refresh() || approvedVisits.has(event)) {
+            this.historyIndex = currentIndex;
+            return;
+        }
+
+        if (win.confirm(this.messageValue)) {
+            approvedVisits.add(event);
+            this.historyIndex = currentIndex;
+            return;
+        }
+
+        const delta = this.historyIndex - currentIndex;
+        expectedRollbackIndex = this.historyIndex;
+        event.stopImmediatePropagation();
+        win.history.go(delta);
+    }
+
+    onTurboBeforeFrameRender(event) {
+        // Only warn when the form is *inside* the frame being replaced.
+        // Frame replacements elsewhere must not block editing this form.
+        if (
+            event.defaultPrevented ||
+            !event.target.contains(this.element) ||
+            this.submitting ||
+            !this.refresh() ||
+            approvedVisits.has(event)
+        ) {
+            return;
+        }
+
+        if (this.element.ownerDocument.defaultView.confirm(this.messageValue)) {
+            approvedVisits.add(event);
+            return;
+        }
+
+        // Turbo's documented custom renderer hook lets the request finish
+        // without replacing the dirty form. Do not leave the visit suspended.
+        event.detail.render = () => {};
+        // The frame's src already points to the refused destination. Clear it
+        // so it does not misleadingly report content from that URL.
+        event.target.removeAttribute('src');
+    }
+
+    onTurboBeforeStreamRender(event) {
+        // Streams can remove/update/replace a form without changing the URL.
+        // Guard only operations whose targets contain this particular form.
+        const stream = event.target;
+        if (
+            event.defaultPrevented ||
+            !['remove', 'replace', 'update'].includes(stream.getAttribute?.('action')) ||
+            !Array.from(stream.targetElements ?? []).some((target) => target === this.element || target.contains(this.element)) ||
+            this.submitting ||
+            !this.refresh() ||
+            approvedVisits.has(event)
+        ) {
+            return;
+        }
+
+        if (this.element.ownerDocument.defaultView.confirm(this.messageValue)) {
+            approvedVisits.add(event);
+        } else {
+            // Let Turbo finish the stream rather than suspending its pipeline.
+            event.detail.render = () => {};
+        }
+    }
+
     onBeforeUnload(event) {
         if (this.submitting || !this.refresh()) {
             return;
@@ -120,12 +298,24 @@ export default class extends Controller {
     // Applications using AJAX without Turbo can call this after a confirmed save.
     markClean() {
         this.baseline = this.snapshot();
+        cachedBaselines.set(this.cacheKey, this.baseline);
+        this.baselineFields = this.readFields();
+        cachedBaselineFields.set(this.cacheKey, this.baselineFields);
+        cachedDraftFields.delete(this.cacheKey);
         this.submitting = false;
         this.refresh();
     }
 
     refresh() {
         const nextDirty = this.snapshot() !== this.baseline;
+        if (nextDirty) {
+            const originals = new Map(this.baselineFields.map((entry) => [entry.id, entry.comparable]));
+            cachedDraftFields.set(this.cacheKey, this.readFields().filter((entry) =>
+                JSON.stringify(entry.comparable) !== JSON.stringify(originals.get(entry.id))
+            ));
+        } else {
+            cachedDraftFields.delete(this.cacheKey);
+        }
 
         if (nextDirty !== this.dirty) {
             this.dirty = nextDirty;
@@ -140,6 +330,70 @@ export default class extends Controller {
         this.indicatorTargets.forEach((target) => {
             target.hidden = !this.dirty;
         });
+    }
+
+    readFields() {
+        const result = [];
+        const counters = new Map();
+        for (const control of this.element.elements) {
+            if (!control.name || control.disabled || control.closest('[data-unsaved-form-ignore]') ||
+                (control.tagName === 'INPUT' && ['button', 'submit', 'reset', 'image'].includes(control.type))) {
+                continue;
+            }
+
+            const base = `${control.name}|${control.type}`;
+            const sequence = counters.get(base) ?? 0;
+            counters.set(base, sequence + 1);
+            const type = control.type;
+            const value = type === 'file'
+                ? Array.from(control.files ?? [])
+                : type === 'checkbox' || type === 'radio'
+                    ? control.checked
+                    : type === 'select-multiple'
+                        ? Array.from(control.options, (option) => option.selected)
+                        : control.value;
+            const comparable = type === 'file'
+                ? value.map((file) => [file.name, file.size, file.lastModified, file.type])
+                : value;
+
+            result.push({ id: `${base}|${sequence}`, value, comparable, control });
+        }
+        return result.map(({ id, value, comparable }) => ({ id, value, comparable }));
+    }
+
+    restoreFields(draft) {
+        const controls = Array.from(this.element.elements);
+        const counters = new Map();
+        const fields = new Map(draft.map((entry) => [entry.id, entry.value]));
+        const win = this.element.ownerDocument.defaultView;
+        for (const control of controls) {
+            if (!control.name || control.disabled || control.closest('[data-unsaved-form-ignore]') ||
+                (control.tagName === 'INPUT' && ['button', 'submit', 'reset', 'image'].includes(control.type))) {
+                continue;
+            }
+            const base = `${control.name}|${control.type}`;
+            const sequence = counters.get(base) ?? 0;
+            counters.set(base, sequence + 1);
+            const key = `${base}|${sequence}`;
+            if (!fields.has(key)) continue;
+
+            const value = fields.get(key);
+            if (control.type === 'checkbox' || control.type === 'radio') {
+                control.checked = value;
+            } else if (control.type === 'select-multiple') {
+                Array.from(control.options).forEach((option, index) => {
+                    option.selected = value[index] ?? false;
+                });
+            } else if (control.type === 'file') {
+                if (typeof win.DataTransfer === 'function') {
+                    const transfer = new win.DataTransfer();
+                    for (const file of value) transfer.items.add(file);
+                    control.files = transfer.files;
+                }
+            } else {
+                control.value = value;
+            }
+        }
     }
 
     snapshot() {
