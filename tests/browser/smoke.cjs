@@ -77,12 +77,12 @@ async function main() {
 
             await run('Turbo Drive: blocked and approved visits', async ({ page, dialogs, approve }) => {
                 await visit(page, '/edit');
-                await page.locator('#edit-form input').fill('Edited');
+                await page.locator('#edit-form input[type=text]').fill('Edited');
                 await page.locator('#nav').click();
                 await pause(150);
                 assert.equal(new URL(page.url()).pathname, '/edit');
                 assert.equal(dialogs.length, 1);
-                assert.equal(await page.locator('#edit-form input').inputValue(), 'Edited');
+                assert.equal(await page.locator('#edit-form input[type=text]').inputValue(), 'Edited');
 
                 approve();
                 await page.locator('#nav').click();
@@ -97,13 +97,15 @@ async function main() {
                 await page.goBack();
                 await page.waitForURL('**/edit');
                 await page.waitForFunction(() => !!window.application?.getControllerForElementAndIdentifier(document.querySelector('#edit-form'), 'guard'));
-                await page.locator('#edit-form input').fill('Dirty after back');
+                await page.locator('#edit-form input[type=text]').fill('Dirty after back');
+                await page.locator('#edit-form input[type=file]').setInputFiles({ name: 'sample.txt', mimeType: 'text/plain', buffer: Buffer.from('draft file') });
 
                 await page.evaluate(() => history.forward());
                 await pause(350);
 
                 assert.equal(new URL(page.url()).pathname, '/edit');
-                assert.equal(await page.locator('#edit-form input').inputValue(), 'Dirty after back');
+                assert.equal(await page.locator('#edit-form input[type=text]').inputValue(), 'Dirty after back');
+                assert.equal(await page.locator('#edit-form input[type=file]').evaluate((input) => input.files?.[0]?.name), 'sample.txt');
                 assert.equal(dialogs.length, 1);
 
                 approve();
@@ -126,12 +128,12 @@ async function main() {
                 await page.locator('#return').click();
                 await page.waitForURL('**/edit');
                 await page.waitForFunction(() => !!window.application?.getControllerForElementAndIdentifier(document.querySelector('#edit-form'), 'guard'));
-                await page.locator('#edit-form input').fill('Dirty when going Back');
+                await page.locator('#edit-form input[type=text]').fill('Dirty when going Back');
 
                 await page.evaluate(() => history.back());
                 await pause(350);
                 assert.equal(new URL(page.url()).pathname, '/edit');
-                assert.equal(await page.locator('#edit-form input').inputValue(), 'Dirty when going Back');
+                assert.equal(await page.locator('#edit-form input[type=text]').inputValue(), 'Dirty when going Back');
                 assert.equal(dialogs.length, 1);
 
                 approve();
@@ -144,11 +146,11 @@ async function main() {
 
             await run('Turbo Frame: click navigation can be declined then accepted', async ({ page, dialogs, approve }) => {
                 await visit(page, '/edit');
-                await page.locator('#frame-form input').waitFor();
-                await page.locator('#frame-form input').fill('Frame edit');
+                await page.locator('#frame-form input[type=text]').waitFor();
+                await page.locator('#frame-form input[type=text]').fill('Frame edit');
                 await page.locator('#frame-next').click();
                 await pause(200);
-                assert.equal(await page.locator('#frame-form input').inputValue(), 'Frame edit');
+                assert.equal(await page.locator('#frame-form input[type=text]').inputValue(), 'Frame edit');
                 assert.equal(await page.locator('#frame-result').count(), 0);
                 assert.equal(dialogs.length, 1);
 
@@ -160,20 +162,20 @@ async function main() {
 
             await run('Turbo Frame: programmatic src navigation can be declined', async ({ page, dialogs }) => {
                 await visit(page, '/edit');
-                await page.locator('#frame-form input').waitFor();
-                await page.locator('#frame-form input').fill('Programmatic frame edit');
+                await page.locator('#frame-form input[type=text]').waitFor();
+                await page.locator('#frame-form input[type=text]').fill('Programmatic frame edit');
                 await page.locator('#program-frame').click();
                 await pause(200);
 
                 assert.equal(new URL(page.url()).pathname, '/edit');
-                assert.equal(await page.locator('#frame-form input').inputValue(), 'Programmatic frame edit');
+                assert.equal(await page.locator('#frame-form input[type=text]').inputValue(), 'Programmatic frame edit');
                 assert.equal(await page.locator('#frame-result').count(), 0);
                 assert.equal(dialogs.length, 1);
             });
 
             await run('Turbo Stream: replacement of edited form is guarded', async ({ page, dialogs, approve }) => {
                 await visit(page, '/edit');
-                await page.locator('#edit-form input').fill('Unsaved stream changes');
+                await page.locator('#edit-form input[type=text]').fill('Unsaved stream changes');
                 const replace = async () => {
                     await page.evaluate(() => window.Turbo.renderStreamMessage(
                         '<turbo-stream action="replace" target="edit-form">' +
@@ -185,7 +187,7 @@ async function main() {
                 await replace();
                 await pause(150);
                 assert.equal(dialogs.length, 1);
-                assert.equal(await page.locator('#edit-form input').inputValue(), 'Unsaved stream changes');
+                assert.equal(await page.locator('#edit-form input[type=text]').inputValue(), 'Unsaved stream changes');
                 assert.equal(await page.locator('#stream-result').count(), 0);
 
                 approve();
@@ -196,7 +198,7 @@ async function main() {
 
             await run('Turbo-disabled link: native beforeunload is invoked', async ({ page, dialogs, approve }) => {
                 await visit(page, '/edit');
-                await page.locator('#edit-form input').fill('Native dirty');
+                await page.locator('#edit-form input[type=text]').fill('Native dirty');
                 await page.locator('#hard').click({ noWaitAfter: true });
                 await pause(200);
                 assert.equal(new URL(page.url()).pathname, '/edit');
@@ -211,7 +213,7 @@ async function main() {
             await run('Without Turbo: native navigation is guarded', async ({ page, dialogs, approve }) => {
                 await visit(page, '/plain-edit');
                 assert.equal(await page.evaluate(() => !!window.Turbo), false);
-                await page.locator('#edit-form input').fill('Plain dirty');
+                await page.locator('#edit-form input[type=text]').fill('Plain dirty');
                 await page.locator('#nav').click({ noWaitAfter: true });
                 await pause(200);
                 assert.equal(new URL(page.url()).pathname, '/plain-edit');
@@ -224,7 +226,7 @@ async function main() {
 
             await run('Without Turbo: native successful form submission does not warn', async ({ page, dialogs }) => {
                 await visit(page, '/plain-edit');
-                await page.locator('#edit-form input').fill('Ready for save');
+                await page.locator('#edit-form input[type=text]').fill('Ready for save');
                 await page.locator('#save').click({ noWaitAfter: true });
                 await page.waitForURL('**/saved');
                 assert.deepEqual(dialogs, []);
@@ -232,7 +234,7 @@ async function main() {
 
             await run('With Turbo: successful form submission does not warn', async ({ page, dialogs }) => {
                 await visit(page, '/edit');
-                await page.locator('#edit-form input').fill('Ready for save');
+                await page.locator('#edit-form input[type=text]').fill('Ready for save');
                 await page.locator('#edit-form #save').click();
                 await page.waitForURL('**/saved');
                 assert.deepEqual(dialogs, []);

@@ -22,6 +22,7 @@ function layout(body, turbo = true) {
 function form(id = 'edit-form', values = { title: 'Original' }) {
     return `<form id="${id}" data-controller="guard" data-guard-message-value="Leave without saving?" action="/submit" method="post">
         <label>Title<input type="text" name="title" value="${values.title}"></label>
+        <label>Attachment<input type="file" name="attachment"></label>
         <button type="submit" id="save">Save</button>
     </form>`;
 }

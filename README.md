@@ -4,7 +4,7 @@ Protect edited forms from accidental navigation in Symfony applications, with or
 
 The bundle contains one small Stimulus controller. No database tables, backend services, custom form types, or autosave. The UI keeps using the native browser's confirmation for full page unloads.
 
-**Status:** v1.0 release candidate — browser compatibility verification in progress. Do not publish to Packagist until all release checks pass.
+**Stable release:** v1.0.0 · **PHP:** 8.2+ · **Symfony:** 7.4/8.x · **StimulusBundle:** 2.9/3.x. Browser navigation is covered by automated tests in Chromium, Firefox, and WebKit.
 
 ## What it handles
 
@@ -24,11 +24,11 @@ Changes to standard inputs, checkboxes, radio buttons, selects, textareas, and s
 
 ## Installation from GitHub
 
-Until the package is available on Packagist:
+Until the package is registered on Packagist, add its Git repository to Composer:
 
 ```bash
 composer config repositories.unsaved-form vcs https://github.com/alkinbg/UnsavedFormBundle.git
-composer require 'alkin/unsaved-form-bundle:dev-main'
+composer require 'alkin/unsaved-form-bundle:^1.0'
 ```
 
 Symfony Flex discovers the bundle and its Stimulus controller. Verify `config/bundles.php` and `assets/controllers.json`. Symfony StimulusBundle and a configured frontend pipeline (such as AssetMapper) are required.
@@ -72,7 +72,7 @@ The controller is loaded automatically and works with or without Symfony UX Turb
 
 **A website cannot guarantee a confirmation on every OS- or browser-initiated termination.** For example, mobile browsers may skip `beforeunload` when an app is force-closed. Browsers control the native confirmation text and may require previous user interaction; our JavaScript cannot override these policies.
 
-Turbo restoration visits do not fire `turbo:before-visit`. The bundle uses the Navigation API history-entry index to reverse declined Back/Forward traversal at `popstate`, then preserves the original form baseline across Turbo cache restorations, where the index is available. Browser versions without a history-entry index require a fallback and cannot currently offer the same behavior. The automated browser tests cover modern Chromium, Firefox, and WebKit.
+Turbo restoration visits do not fire `turbo:before-visit`. The bundle uses the Navigation API history-entry index to reverse declined Back/Forward traversal at `popstate`, then preserves the original form baseline across Turbo cache restorations, where the index is available. Browser versions without a history-entry index require a fallback and cannot currently offer the same behavior. The automated browser tests cover modern Chromium, Firefox, and WebKit, including Back, Forward, Frames, Streams, and operation without Turbo.
 
 Turbo Frame navigation is guarded immediately before rendering. When a user declines, the new frame content is not rendered and the frame's `src` is cleared because it no longer represents the visible frame content.
 
