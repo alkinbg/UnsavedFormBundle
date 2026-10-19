@@ -1,37 +1,38 @@
 # Unsaved Form Bundle
 
-A small, independent Symfony UX experiment: warn users if they try to leave a form with unsaved edits.
+Protect edited forms from accidental navigation in Symfony applications, with or without Turbo.
 
-**Status:** prototype. Not a stable release or an official Symfony component. No Packagist publication yet.
+The bundle contains one small Stimulus controller. No database tables, backend services, custom form types, or autosave. The UI keeps using the native browser's confirmation for full page unloads.
 
-## Why?
+**Status:** v1.0 release candidate — browser compatibility verification in progress. Do not publish to Packagist until all release checks pass.
 
-Editable forms are common. Implementing change detection, a warning on ordinary navigation, a warning on Turbo Drive navigation, and correct handling of successful/failed form submission is easy to repeat across projects and surprisingly easy to get wrong.
+## What it handles
 
-This bundle provides **one Stimulus controller**. It does not introduce PHP services, database tables, or custom form types.
+| Navigation or action | Behavior |
+| --- | --- |
+| Ordinary links and page reload (no Turbo) | Native browser `beforeunload` confirmation |
+| Closing a tab or browser | Native `beforeunload` where supported by the browser |
+| Turbo Drive links and programmatic `Turbo.visit()` | Confirm before starting the visit |
+| Turbo Drive Back/Forward | Confirm and cancel eligible same-document history traversals through the Navigation API |
+| Turbo Frames (including programmatic `src` updates) | Confirm before replacing a frame containing an edited form |
+| Native successful form submission | No false warning when submitting |
+| Turbo form submission | No false warning while submitting; dirty state maintained after an unsuccessful submission where the form is not replaced |
+| Reset or revert to the original values | Form becomes clean again |
 
-## Supported behavior
+Changes to standard inputs, checkboxes, radio buttons, selects, textareas, and selected files are tracked by values rather than by a simple "ever touched" flag. A change event is dispatched when the dirty state toggles.
 
-- Detects changes to text inputs, selects, checkboxes, radio groups, textareas, and file input selections.
-- Recognizes when a field is changed *back* to its original value.
-- Warns with the browser's built-in confirmation on reload, hard navigation, or tab close (when browser policy allows).
-- Confirms cancellable Turbo Drive application visits.
-- Does not warn for an ordinary valid form submission; restores the dirty state after a failed Turbo submission.
-- Resets the saved baseline after a successful Turbo submission, or when you call `markClean()`.
-- Optional dirty-state indicator, emitted change event, and `data-unsaved-form-ignore` attribute.
+## Installation from GitHub
 
-## Install for testing from GitHub
-
-Once this repository is public, test the unreleased code with a VCS repository:
+Until the package is available on Packagist:
 
 ```bash
 composer config repositories.unsaved-form vcs https://github.com/alkinbg/UnsavedFormBundle.git
 composer require 'alkin/unsaved-form-bundle:dev-main'
 ```
 
-The application needs Symfony StimulusBundle and a configured frontend pipeline such as AssetMapper. Symfony Flex registers the bundle and its controller; **verify** `config/bundles.php` and `assets/controllers.json`. It is not yet distributed through Packagist.
+Symfony Flex discovers the bundle and its Stimulus controller. Verify `config/bundles.php` and `assets/controllers.json`. Symfony StimulusBundle and a configured frontend pipeline (such as AssetMapper) are required.
 
-Use the provided controller on a Symfony Form:
+## Using it with Symfony Forms
 
 ```twig
 {{ form_start(form, {
@@ -40,53 +41,53 @@ Use the provided controller on a Symfony Form:
         'data-alkin--unsaved-form-bundle--guard-message-value': 'You have unsaved changes. Leave this page?'
     }
 }) }}
-
     {{ form_widget(form) }}
     <span hidden data-alkin--unsaved-form-bundle--guard-target="indicator">
         Unsaved changes
     </span>
-
     <button type="submit">Save</button>
 {{ form_end(form) }}
 ```
 
-Or add the controller directly to an HTML form:
+You can also use it with a plain HTML form:
 
 ```html
-<form data-controller="alkin--unsaved-form-bundle--guard">
-  <input name="title" value="Example">
-  <button type="submit">Save</button>
+<form data-controller="alkin--unsaved-form-bundle--guard" method="post">
+    <input name="title" value="Example">
+    <button type="submit">Save</button>
 </form>
 ```
 
-To ignore a field or wrapper:
+The controller is loaded automatically and works with or without Symfony UX Turbo.
 
-```html
-<input name="client-only" data-unsaved-form-ignore>
-```
+### API
 
-If you save a form through custom JavaScript without Turbo, call `controller.markClean()` after a **confirmed successful save**. Programmatic field updates should dispatch an `input` or `change` event to update the indicator; navigation still re-checks actual field values.
+- `controller.markClean()`: call after an explicitly confirmed successful AJAX save (when not using Turbo's form submission lifecycle).
+- `data-unsaved-form-ignore`: set on fields or wrappers whose values do not need tracking.
+- `alkin--unsaved-form-bundle--guard:change`: event on the form with `event.detail.dirty`.
+- `indicator` target: optional element shown only while changes are unsaved.
 
-## Important limitations
+## Browser/platform constraints
 
-- Turbo **Back/Forward (restoration visits)** do not emit `turbo:before-visit` and cannot be canceled by that event. This prototype deliberately does **not** claim to guard those visits.
-- Turbo Frame navigation is not covered; only Turbo Drive visits and browser navigation are handled.
-- Native `beforeunload` prompts are browser-controlled, may require prior user interaction, and cannot use a custom message.
-- Fields added after connection participate in later comparisons. Purely visual changes and unnamed/disabled controls are ignored.
-- When several dirty forms share a page, one Turbo visit prompts only once. Native `beforeunload` may still involve multiple handlers, depending on the browser.
-- If your app replaces form content with Turbo Streams or DOM morphing, you must deliberately choose when to reset the saved baseline.
-- No autosave, automatic form submission, persistent data storage, or server-side form modifications.
+**A website cannot guarantee a confirmation on every OS- or browser-initiated termination.** For example, mobile browsers may skip `beforeunload` when an app is force-closed. Browsers control the native confirmation text and may require previous user interaction; our JavaScript cannot override these policies.
 
-## Development
+Turbo restoration visits do not fire `turbo:before-visit`. The bundle uses the standard browser Navigation API for same-document Back/Forward visits where they are cancelable. Older browsers without that support cannot provide exactly the same guarantees. The automated browser tests cover modern Chromium, Firefox, and WebKit.
+
+Turbo Frame navigation is guarded immediately before rendering. When a user declines, the new frame content is not rendered and the frame's `src` is cleared because it no longer represents the visible frame content.
+
+All forms can be explicitly marked clean with `markClean()`. Programmatic changes to field values should dispatch an `input` or `change` event for immediate indicators; navigation always rechecks their actual values. Deliberately replacing a dirty form from arbitrary third-party JavaScript is not a navigation and cannot be prevented without application-specific coordination.
+
+## Development and testing
 
 ```bash
 composer validate --strict
 npm ci
 npm test
+npm run test:browser
 ```
 
-The tests exercise the Stimulus controller with jsdom; browser and Turbo integration are still considered experimental.
+The browser suite uses Playwright with a local HTTP fixture and the real Hotwire Turbo 8 library. You must install the browsers first with `npx playwright install --with-deps` (Linux distributions may require OS packages). In CI, the browser test runs separately on Chromium, Firefox, and WebKit.
 
 ## License
 
-MIT.
+MIT. Copyright 2026 Novora Labs.

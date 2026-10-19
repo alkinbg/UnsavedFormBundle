@@ -20,6 +20,8 @@ export default class extends Controller {
         this.onTurboSubmitStart = this.onTurboSubmitStart.bind(this);
         this.onTurboSubmitEnd = this.onTurboSubmitEnd.bind(this);
         this.onTurboBeforeVisit = this.onTurboBeforeVisit.bind(this);
+        this.onNavigation = this.onNavigation.bind(this);
+        this.onTurboBeforeFrameRender = this.onTurboBeforeFrameRender.bind(this);
         this.onBeforeUnload = this.onBeforeUnload.bind(this);
     }
 
@@ -40,6 +42,8 @@ export default class extends Controller {
         this.element.addEventListener('turbo:submit-start', this.onTurboSubmitStart);
         this.element.addEventListener('turbo:submit-end', this.onTurboSubmitEnd);
         this.element.ownerDocument.addEventListener('turbo:before-visit', this.onTurboBeforeVisit);
+        this.element.ownerDocument.addEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
+        this.element.ownerDocument.defaultView.navigation?.addEventListener('navigate', this.onNavigation);
         this.element.ownerDocument.defaultView.addEventListener('beforeunload', this.onBeforeUnload);
     }
 
@@ -51,6 +55,8 @@ export default class extends Controller {
         this.element.removeEventListener('turbo:submit-start', this.onTurboSubmitStart);
         this.element.removeEventListener('turbo:submit-end', this.onTurboSubmitEnd);
         this.element.ownerDocument.removeEventListener('turbo:before-visit', this.onTurboBeforeVisit);
+        this.element.ownerDocument.removeEventListener('turbo:before-frame-render', this.onTurboBeforeFrameRender, true);
+        this.element.ownerDocument.defaultView.navigation?.removeEventListener('navigate', this.onNavigation);
         this.element.ownerDocument.defaultView.removeEventListener('beforeunload', this.onBeforeUnload);
     }
 
@@ -105,6 +111,57 @@ export default class extends Controller {
         }
 
         approvedVisits.add(event);
+    }
+
+    onNavigation(event) {
+        // Turbo restoration visits (Back/Forward) do not fire turbo:before-visit.
+        // The modern Navigation API can cancel eligible same-document traversals
+        // before the history position changes. Full-page navigations continue
+        // to use the browser's native beforeunload confirmation.
+        if (
+            event.defaultPrevented ||
+            event.navigationType !== 'traverse' ||
+            !event.destination?.sameDocument ||
+            event.hashChange ||
+            !event.cancelable ||
+            this.submitting ||
+            !this.refresh() ||
+            approvedVisits.has(event)
+        ) {
+            return;
+        }
+
+        if (this.element.ownerDocument.defaultView.confirm(this.messageValue)) {
+            approvedVisits.add(event);
+        } else {
+            event.preventDefault();
+        }
+    }
+
+    onTurboBeforeFrameRender(event) {
+        // Only warn when the form is *inside* the frame being replaced.
+        // Frame replacements elsewhere must not block editing this form.
+        if (
+            event.defaultPrevented ||
+            !event.target.contains(this.element) ||
+            this.submitting ||
+            !this.refresh() ||
+            approvedVisits.has(event)
+        ) {
+            return;
+        }
+
+        if (this.element.ownerDocument.defaultView.confirm(this.messageValue)) {
+            approvedVisits.add(event);
+            return;
+        }
+
+        // Turbo's documented custom renderer hook lets the request finish
+        // without replacing the dirty form. Do not leave the visit suspended.
+        event.detail.render = () => {};
+        // The frame's src already points to the refused destination. Clear it
+        // so it does not misleadingly report content from that URL.
+        event.target.removeAttribute('src');
     }
 
     onBeforeUnload(event) {

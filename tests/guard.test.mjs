@@ -280,3 +280,78 @@ test('listeners are removed when the form disconnects', async () => {
     await tick();
     assert.equal(unloadEvent().defaultPrevented, false);
 });
+
+test('Navigation API cancels same-document Back/Forward traversal when dirty', () => {
+    const navigation = new dom.window.EventTarget();
+    dom.window.navigation = navigation;
+    // Existing controller connected before navigation was assigned, so connect
+    // the browser listener directly to exercise the event behavior.
+    navigation.addEventListener('navigate', guard.onNavigation);
+    let prompts = 0;
+    dom.window.confirm = () => { prompts++; return false; };
+    input('title').value = 'Changed';
+    const event = new dom.window.Event('navigate', { cancelable: true });
+    Object.assign(event, {
+        navigationType: 'traverse',
+        destination: { sameDocument: true },
+        hashChange: false,
+    });
+    navigation.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(prompts, 1);
+    navigation.removeEventListener('navigate', guard.onNavigation);
+});
+
+test('Navigation API ignores full-page history traversal to avoid double prompts', () => {
+    const event = new dom.window.Event('navigate', { cancelable: true });
+    Object.assign(event, {
+        navigationType: 'traverse',
+        destination: { sameDocument: false },
+        hashChange: false,
+    });
+    input('title').value = 'Changed';
+    dom.window.confirm = () => { throw new Error('A cross-document visit must use beforeunload'); };
+    guard.onNavigation(event);
+    assert.equal(event.defaultPrevented, false);
+});
+
+test('Turbo Frame refuses replacing a dirty form without hanging rendering', async () => {
+    const frame = dom.window.document.createElement('turbo-frame');
+    frame.id = 'editor';
+    form.before(frame);
+    frame.append(form);
+    await tick();
+    guard = application.getControllerForElementAndIdentifier(form, identifier);
+    assert.ok(guard);
+
+    input('title').value = 'Dirty frame';
+    frame.setAttribute('src', '/other');
+    dom.window.confirm = () => false;
+    let didRender = false;
+    const event = new dom.window.CustomEvent('turbo:before-frame-render', {
+        cancelable: true,
+        bubbles: true,
+        detail: { render: () => { didRender = true; } },
+    });
+    frame.dispatchEvent(event);
+    event.detail.render();
+    assert.equal(didRender, false);
+    assert.equal(form.isConnected, true);
+    assert.equal(input('title').value, 'Dirty frame');
+    assert.equal(frame.hasAttribute('src'), false);
+});
+
+test('Turbo Frame visits outside the dirty form do not prompt', () => {
+    const otherFrame = dom.window.document.createElement('turbo-frame');
+    dom.window.document.body.append(otherFrame);
+    input('title').value = 'Dirty';
+    dom.window.confirm = () => { throw new Error('Unrelated frame must not warn'); };
+    const renderer = () => {};
+    const event = new dom.window.CustomEvent('turbo:before-frame-render', {
+        cancelable: true,
+        bubbles: true,
+        detail: { render: renderer },
+    });
+    otherFrame.dispatchEvent(event);
+    assert.equal(event.detail.render, renderer);
+});
