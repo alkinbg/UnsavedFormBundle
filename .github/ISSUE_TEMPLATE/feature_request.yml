@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a small feature that improves form editing or navigation.
+title: "[Idea]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: >
+        We prefer small, reusable conveniences over a growing form framework.
+        Describe the developer experience, not only a proposed implementation.
+  - type: textarea
+    id: use-case
+    attributes:
+      label: What would this make easier?
+      description: Explain the repetitive work or interaction that should improve.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Suggested behavior
+      description: Show a short Twig, HTML or Stimulus example, if possible.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and compatibility considerations
+      description: Optional existing solutions or Turbo/browser interactions to consider.
+    validations:
+      required: false
